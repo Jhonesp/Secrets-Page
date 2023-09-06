@@ -5,6 +5,8 @@ import mongoose from 'mongoose';
 import session from 'express-session';
 import passport from 'passport';
 import passportLocalMongoose from 'passport-local-mongoose';
+import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import findOrCreate from 'mongoose-findorcreate';
 
 
 
@@ -29,35 +31,67 @@ main();
 
 const userSchema = new mongoose.Schema({
     email: String,
-    password: String
+    password: String,
+    googleId: String,
+    Secret: String
 });
 userSchema.plugin(passportLocalMongoose);
+userSchema.plugin(findOrCreate);
 
-const User = new mongoose.model("User",userSchema);
+const User = mongoose.model("User",userSchema);
 
 passport.use(User.createStrategy());
 passport.serializeUser(User.serializeUser());
 passport.deserializeUser(User.deserializeUser());
 
+passport.use(new GoogleStrategy({
+    clientID: process.env.CLIENT_ID,
+    clientSecret: process.env.SECRET,
+    callbackURL: "http://localhost:3000/auth/google/secrets",
+    userProfileURL: "https://www.googleapis.com/oauth2/v3/userinfo",
+    scope: ["email","profile"]
+  },
+  function(accessToken, refreshToken, profile, cb) {
+    console.log(profile);
+    //Crear una funcion util para actualmente crear el perfil si se registra, y rechazar cuando no se consiga el user si es login
+    User.findOrCreate({ googleId: profile.id , username: profile.emails[0].value}, function (err, user) {
+      return cb(err, user);
+    });
+  }
+));
+
 app.get("/", (req, res) =>{
     res.render("home.ejs")
-})
+});
+
+//Rutas de google Auth 2.0
+app.get("/auth/google",
+    passport.authenticate("google", {scope: ["email","profile"]})
+);
+
+app.get("/auth/google/secrets",
+    passport.authenticate("google", {failureRedirect: "/login"}),
+    (req, res) =>{
+        //Autenticacion exitosa, redireccionar a secrets
+        res.redirect("/secrets");
+    }
+);
 
 app.get("/login", (req, res) =>{
     res.render("login.ejs")
-})
+});
 
 app.get("/register", (req, res) =>{
     res.render("register.ejs")
-})
+});
 
 app.get("/secrets", (req, res)=>{
-    if(req.isAuthenticated()){
-        res.render("secrets.ejs");
-    }else{
-        res.redirect("/login");
-    }
-})
+    User.find({"Secret": {$ne: null} }).then((foundUsers)=>{
+        if(foundUsers){
+            res.render("secrets.ejs", {usersWithSecrets: foundUsers})
+        };
+    });
+});
 
 app.post("/register", async (req, res) =>{
 
@@ -88,6 +122,32 @@ app.post("/login", async(req, res) =>{
             });
         };
     });
+});
+
+app.get("/submit", (req, res) =>{
+    if(req.isAuthenticated()){
+        res.render("submit.ejs");
+    }else{
+        res.redirect("/login");
+    }
+});
+
+app.post("/submit", async(req, res) =>{
+    const submittedSecret = req.body.secret;
+    console.log(req.user.id);
+
+    const rest = await User.findByIdAndUpdate(req.user.id ,{Secret: submittedSecret}).then(()=>{
+        res.redirect("/secrets");
+    });
+    
+    // await User.findById(req.user.id).then(async function (foundUser){
+    //     if(foundUser){
+    //         foundUser.secret = submittedSecret;
+    //         await foundUser.save().then( ()=>{
+    //             res.redirect("/secrets");
+    //         });
+    //     };
+    // });
 });
 
 app.get("/logout", (req, res) =>{
